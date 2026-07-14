@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>B4K Court Planner — 3D Badminton Tactics Board</title>
+<style>
+  :root{
+    --panel:#ffffff; --ink:#1e2a3a; --accent:#ff6b35; --accent2:#2ec4b6;
+    --soft:#f2f5f9; --line:#e3e9f0;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; overflow:hidden; font-family:'Segoe UI',system-ui,-apple-system,sans-serif; color:var(--ink);}
+  #app{display:flex; height:100%;}
+  #viewport{flex:1; position:relative; min-width:0;}
+  #canvas3d{width:100%; height:100%; display:block; touch-action:none;}
+  #sidebar{
+    width:320px; background:var(--panel); border-left:1px solid var(--line);
+    overflow-y:auto; padding:14px; flex-shrink:0;
+  }
+  h1{font-size:17px; margin-bottom:2px;}
+  h1 span{color:var(--accent);}
+  .sub{font-size:11px; color:#7b8794; margin-bottom:12px;}
+  .section{border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:12px; background:#fff;}
+  .section h2{font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:#54677d; margin-bottom:8px;}
+  button{
+    background:var(--soft); border:1px solid var(--line); border-radius:8px;
+    padding:7px 10px; font-size:12.5px; cursor:pointer; color:var(--ink);
+  }
+  button:hover{background:#e8eef5;}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600;}
+  button.primary:hover{background:#e85a26;}
+  button.active{background:var(--accent2); border-color:var(--accent2); color:#fff;}
+  .row{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;}
+  .row:last-child{margin-bottom:0;}
+  select,input[type=text],textarea{
+    border:1px solid var(--line); border-radius:8px; padding:7px 8px; font-size:12.5px;
+    width:100%; font-family:inherit; background:#fff; color:var(--ink);
+  }
+  textarea{resize:vertical; min-height:90px;}
+  input[type=color]{width:34px; height:30px; border:1px solid var(--line); border-radius:6px; padding:1px; background:#fff; cursor:pointer;}
+  .colorrow{display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:12.5px;}
+  .colorrow label{flex:1;}
+  #playerList{display:flex; flex-direction:column; gap:5px; margin-top:8px;}
+  .pItem{display:flex; align-items:center; gap:6px; font-size:12.5px; background:var(--soft); border-radius:8px; padding:5px 8px;}
+  .pItem.sel{outline:2px solid var(--accent2);}
+  .pItem .dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;}
+  .pItem span{flex:1;}
+  .pItem button{padding:2px 8px; font-size:11px;}
+  #formList{display:flex; flex-direction:column; gap:5px; margin-top:8px; max-height:170px; overflow-y:auto;}
+  .fItem{display:flex; align-items:center; gap:6px; font-size:12.5px; background:var(--soft); border-radius:8px; padding:5px 8px;}
+  .fItem span{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .fItem button{padding:2px 8px; font-size:11px;}
+  #toolbar{
+    position:absolute; top:12px; left:12px; display:flex; gap:6px; z-index:5;
+    background:rgba(255,255,255,.92); padding:6px; border-radius:12px; box-shadow:0 2px 12px rgba(0,0,0,.12);
+  }
+  #hint{
+    position:absolute; bottom:12px; left:12px; z-index:5; font-size:11.5px; color:#fff;
+    background:rgba(20,30,45,.72); padding:6px 12px; border-radius:8px; pointer-events:none; max-width:70%;
+  }
+  #bwfBadge{
+    position:absolute; top:12px; right:12px; z-index:5; font-size:10.5px; letter-spacing:.4px;
+    background:rgba(46,196,182,.92); color:#fff; padding:5px 10px; border-radius:8px; font-weight:600;
+  }
+  .small{font-size:11px; color:#7b8794; margin-top:6px; line-height:1.4;}
+  @media (max-width:760px){
+    #app{flex-direction:column;}
+    #sidebar{width:100%; height:45%; border-left:none; border-top:1px solid var(--line);}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="viewport">
+    <canvas id="canvas3d"></canvas>
+    <div id="toolbar">
+      <button id="toolMove" class="active" title="Drag players & shuttle">✥ Move</button>
+      <button id="toolLine" title="Freehand line on court">✎ Line</button>
+      <button id="toolArrow" title="Drag to draw an arrow">➤ Arrow</button>
+      <button id="toolUndo" title="Undo last drawing">↩ Undo</button>
+      <button id="toolClear" title="Clear all drawings">🗑 Clear</button>
+      <button id="toolTop" title="Top-down view">▣ Top</button>
+      <button id="tool3D" title="Perspective view">◇ 3D</button>
+    </div>
+    <div id="bwfBadge">BWF SPEC · 13.40 × 6.10 m · NET 1.524 m</div>
+    <div id="hint">Rotate: drag &nbsp;·&nbsp; Zoom: scroll/pinch &nbsp;·&nbsp; Pan: right-drag &nbsp;·&nbsp; Move mode: drag a player or the shuttle</div>
+  </div>
+
+  <div id="sidebar">
+    <h1>B4K <span>Court Planner</span></h1>
+    <div class="sub">Badminton4Kids · 3D tactics &amp; formation board</div>
+
+    <div class="section">
+      <h2>Players (max 6)</h2>
+      <div class="row">
+        <select id="charSelect" style="flex:1">
+          <option value="male">🧑 Male player</option>
+          <option value="female">👩 Female player</option>
+          <option value="quokka">🐹 Quokka</option>
+          <option value="panda">🐼 Panda</option>
+          <option value="rabbit">🐰 Rabbit</option>
+          <option value="elephant">🐘 Elephant</option>
+          <option value="bear">🐻 Bear</option>
+          <option value="penguin">🐧 Penguin</option>
+        </select>
+        <button id="addPlayer" class="primary">+ Add</button>
+      </div>
+      <div id="playerList"></div>
+    </div>
+
+    <div class="section">
+      <h2>Colours</h2>
+      <div class="colorrow"><label>Background</label><input type="color" id="colBg" value="#243447"></div>
+      <div class="colorrow"><label>Court surface</label><input type="color" id="colCourt" value="#2e8b57"></div>
+      <div class="colorrow"><label>Surround floor</label><input type="color" id="colFloor" value="#b0492f"></div>
+      <div class="colorrow"><label>Drawing colour</label><input type="color" id="colDraw" value="#ffe100"></div>
+    </div>
+
+    <div class="section">
+      <h2>Notes</h2>
+      <textarea id="notes" placeholder="Coaching notes for this formation… e.g. 'P1 covers front court after serve, P2 rotates to rear.'"></textarea>
+    </div>
+
+    <div class="section">
+      <h2>Formations</h2>
+      <div class="row">
+        <input type="text" id="formName" placeholder="Formation name…" style="flex:1">
+        <button id="saveForm" class="primary">Save</button>
+      </div>
+      <div id="formList"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="exportBtn" style="flex:1">⬇ Export JSON</button>
+        <button id="importBtn" style="flex:1">⬆ Import JSON</button>
+        <input type="file" id="importFile" accept=".json" style="display:none">
+      </div>
+      <div class="small">Formations save player positions, shuttle, drawings, colours and notes. Stored in this browser; export JSON to back up or share.</div>
+    </div>
+
+    <div class="section">
+      <h2>BWF specification</h2>
+      <div class="small">
+        Court 13.40 m × 6.10 m (doubles) · singles width 5.18 m · lines 40 mm, part of the court ·
+        short service line 1.98 m from net · doubles long service line 0.76 m inside baseline ·
+        net height 1.55 m at posts, 1.524 m at centre · net depth 0.76 m, 75 mm white tape.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ================= BWF DIMENSIONS (metres) ================= */
+const COURT_L = 13.40, COURT_W = 6.10;          // doubles court
+const HALF_L = COURT_L/2, HALF_W = COURT_W/2;   // net at z = 0
+const SINGLES_HW = 5.18/2;                       // singles half width 2.59
+const SHORT_SVC = 1.98;                          // short service line from net
+const DBL_LONG_SVC = HALF_L - 0.76;              // 5.94 from net
+const LINE_W = 0.04;                             // 40 mm lines
+const NET_POST_H = 1.55, NET_CENTER_H = 1.524, NET_DEPTH = 0.76, NET_TAPE = 0.075;
+
+/* ================= SCENE ================= */
+const canvas = document.getElementById('canvas3d');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#243447');
+
+const camera = new THREE.PerspectiveCamera(45, 2, 0.1, 200);
+camera.position.set(9, 9, 12);
+
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 0, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI/2 - 0.02;
+controls.minDistance = 2.5;
+controls.maxDistance = 45;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 1.35);
+sun.position.set(8, 14, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -12; sun.shadow.camera.right = 12;
+sun.shadow.camera.top = 12;  sun.shadow.camera.bottom = -12;
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0xbcd8ff, 0.35);
+fill.position.set(-6, 8, -8);
+scene.add(fill);
+
+/* ================= FLOOR + COURT ================= */
+const floorMat = new THREE.MeshStandardMaterial({color:'#b0492f', roughness:0.95});
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), floorMat);
+floor.rotation.x = -Math.PI/2;
+floor.position.y = -0.002;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const courtMat = new THREE.MeshStandardMaterial({color:'#2e8b57', roughness:0.85});
+const court = new THREE.Mesh(new THREE.PlaneGeometry(COURT_W, COURT_L), courtMat);
+court.rotation.x = -Math.PI/2;
+court.receiveShadow = true;
+scene.add(court);
+
+/* Court lines — 40 mm white, sitting just above surface.
+   BWF: lines are part of the area they bound, so line OUTER edges align
+   with the 13.40 × 6.10 boundary. */
+const lineMat = new THREE.MeshStandardMaterial({color:'#ffffff', roughness:0.6});
+const lines = new THREE.Group();
+function addLine(cx, cz, w, d){ // centred at (cx,cz), width w (x), depth d (z)
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.004, d), lineMat);
+  m.position.set(cx, 0.004, cz);
+  lines.add(m);
+}
+const hw = LINE_W/2;
+// Sidelines (doubles) — inner edge inward
+addLine(-HALF_W+hw, 0, LINE_W, COURT_L);
+addLine( HALF_W-hw, 0, LINE_W, COURT_L);
+// Singles sidelines — outer edge at ±2.59
+addLine(-SINGLES_HW+hw, 0, LINE_W, COURT_L);
+addLine( SINGLES_HW-hw, 0, LINE_W, COURT_L);
+// Baselines
+addLine(0, -HALF_L+hw, COURT_W, LINE_W);
+addLine(0,  HALF_L-hw, COURT_W, LINE_W);
+// Doubles long service lines (0.76 m inside baseline, outer edge at 5.94)
+addLine(0, -DBL_LONG_SVC+hw, COURT_W, LINE_W);
+addLine(0,  DBL_LONG_SVC-hw, COURT_W, LINE_W);
+// Short service lines (front edge 1.98 m from net)
+addLine(0, -SHORT_SVC-hw, COURT_W, LINE_W);
+addLine(0,  SHORT_SVC+hw, COURT_W, LINE_W);
+// Centre lines: from short service line to baseline, both halves
+const centreLen = HALF_L - SHORT_SVC;
+addLine(0, -(SHORT_SVC + centreLen/2), LINE_W, centreLen);
+addLine(0,  (SHORT_SVC + centreLen/2), LINE_W, centreLen);
+scene.add(lines);
+
+/* ================= NET (1.55 posts, 1.524 centre sag, 0.76 deep) ================= */
+const netGroup = new THREE.Group();
+const postMat = new THREE.MeshStandardMaterial({color:'#37474f', roughness:0.5, metalness:0.4});
+for (const sx of [-1, 1]){
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, NET_POST_H, 16), postMat);
+  post.position.set(sx*HALF_W, NET_POST_H/2, 0);
+  post.castShadow = true;
+  netGroup.add(post);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.05, 16), postMat);
+  base.position.set(sx*HALF_W, 0.025, 0);
+  netGroup.add(base);
+}
+// Sagged net mesh: build geometry with top edge curving 1.55 → 1.524 → 1.55
+(function buildNet(){
+  const SEG = 40, ROWS = 8;
+  const pos = [], idx = [], uv = [];
+  for (let r = 0; r <= ROWS; r++){
+    for (let i = 0; i <= SEG; i++){
+      const t = i/SEG, x = -HALF_W + t*COURT_W;
+      const sag = NET_POST_H - (NET_POST_H - NET_CENTER_H) * Math.sin(Math.PI*t); // parabolic-ish sag
+      const top = sag, bottom = sag - NET_DEPTH;
+      const y = top - (r/ROWS)*(top-bottom);
+      pos.push(x, y, 0); uv.push(t, r/ROWS);
+    }
+  }
+  for (let r = 0; r < ROWS; r++)
+    for (let i = 0; i < SEG; i++){
+      const a = r*(SEG+1)+i, b = a+1, c = a+SEG+1, d = c+1;
+      idx.push(a,c,b, b,c,d);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv,2));
+  g.setIndex(idx); g.computeVertexNormals();
+
+  // netting texture (dark mesh grid)
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const cx = cv.getContext('2d');
+  cx.fillStyle = 'rgba(20,25,30,0.25)'; cx.fillRect(0,0,128,128);
+  cx.strokeStyle = 'rgba(15,20,26,0.95)'; cx.lineWidth = 2;
+  for (let k = 0; k <= 128; k += 16){
+    cx.beginPath(); cx.moveTo(k,0); cx.lineTo(k,128); cx.stroke();
+    cx.beginPath(); cx.moveTo(0,k); cx.lineTo(128,k); cx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(30, 5);
+  const net = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+    map:tex, transparent:true, side:THREE.DoubleSide, roughness:0.9
+  }));
+  netGroup.add(net);
+
+  // white tape along sagged top edge (75 mm)
+  const tapePts = [];
+  for (let i = 0; i <= SEG; i++){
+    const t = i/SEG, x = -HALF_W + t*COURT_W;
+    const sag = NET_POST_H - (NET_POST_H - NET_CENTER_H) * Math.sin(Math.PI*t);
+    tapePts.push(new THREE.Vector3(x, sag - NET_TAPE/2, 0));
+  }
+  const tape = new THREE.Mesh(
+    new THREE.TubeGeometry(new THREE.CatmullRomCurve3(tapePts), 60, NET_TAPE/2, 8, false),
+    new THREE.MeshStandardMaterial({color:'#ffffff', roughness:0.5})
+  );
+  tape.scale.z = 0.35;
+  netGroup.add(tape);
+})();
+scene.add(netGroup);
+
+/* ================= CHARACTERS ================= */
+const SKIN = 0xf3c39a, SKIN2 = 0xc98a5b;
+function std(c){ return new THREE.MeshStandardMaterial({color:c, roughness:0.75}); }
+function sphere(r, mat, x=0, y=0, z=0, sx=1, sy=1, sz=1){
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 18), mat);
+  m.position.set(x,y,z); m.scale.set(sx,sy,sz); m.castShadow = true; return m;
+}
+function cyl(rt, rb, h, mat, x=0, y=0, z=0){
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, 20), mat);
+  m.position.set(x,y,z); m.castShadow = true; return m;
+}
+function eyes(g, y, z, spread=0.075, r=0.028){
+  const em = std(0x141414);
+  g.add(sphere(r, em, -spread, y, z), sphere(r, em, spread, y, z));
+}
+function racket(g, x, y, z){
+  const grip = cyl(0.016, 0.016, 0.22, std(0x333333), 0, 0, 0);
+  const head = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.012, 8, 24), std(0xd23b3b));
+  head.position.y = 0.2; head.castShadow = true;
+  const r = new THREE.Group(); r.add(grip, head);
+  r.position.set(x, y, z); r.rotation.z = -0.6; r.rotation.x = 0.25;
+  g.add(r);
+}
+function makeHuman(female, shirt, shorts){
+  const g = new THREE.Group();
+  const sm = std(shirt), pm = std(shorts), skin = std(SKIN);
+  g.add(cyl(0.05, 0.055, 0.32, skin, -0.09, 0.16, 0)); // legs
+  g.add(cyl(0.05, 0.055, 0.32, skin,  0.09, 0.16, 0));
+  g.add(sphere(0.07, std(0xffffff), -0.09, 0.035, 0.02, 1, 0.6, 1.35)); // shoes
+  g.add(sphere(0.07, std(0xffffff),  0.09, 0.035, 0.02, 1, 0.6, 1.35));
+  if (female){
+    g.add(cyl(0.13, 0.21, 0.2, pm, 0, 0.4, 0)); // skirt
+    g.add(cyl(0.14, 0.13, 0.3, sm, 0, 0.62, 0));
+  } else {
+    g.add(cyl(0.15, 0.16, 0.16, pm, 0, 0.4, 0)); // shorts
+    g.add(cyl(0.15, 0.15, 0.32, sm, 0, 0.63, 0));
+  }
+  g.add(cyl(0.045, 0.045, 0.26, sm, -0.19, 0.66, 0)); // arms
+  g.add(cyl(0.045, 0.045, 0.26, sm,  0.19, 0.66, 0));
+  g.add(sphere(0.05, skin, -0.19, 0.5, 0));
+  g.add(sphere(0.05, skin,  0.19, 0.5, 0));
+  const head = sphere(0.14, skin, 0, 0.95, 0);
+  g.add(head);
+  // hair
+  if (female){
+    g.add(sphere(0.145, std(0x4a2c17), 0, 0.98, -0.03, 1, 0.95, 1));
+    g.add(sphere(0.055, std(0x4a2c17), 0, 0.86, -0.15, 1, 1.6, 1)); // ponytail
+  } else {
+    g.add(sphere(0.142, std(0x2b1b10), 0, 0.99, -0.02, 1, 0.75, 1));
+  }
+  eyes(g, 0.97, 0.125, 0.055, 0.02);
+  racket(g, 0.26, 0.6, 0.08);
+  return g;
+}
+function animalBase(bodyC, bellyC, headR=0.17){
+  const g = new THREE.Group(), bm = std(bodyC);
+  g.add(sphere(0.2, bm, 0, 0.34, 0, 1, 1.15, 0.9));            // body
+  if (bellyC) g.add(sphere(0.155, std(bellyC), 0, 0.3, 0.09, 1, 1.05, 0.7));
+  g.add(sphere(0.07, bm, -0.12, 0.09, 0.03, 1, 0.8, 1.3));      // feet
+  g.add(sphere(0.07, bm,  0.12, 0.09, 0.03, 1, 0.8, 1.3));
+  g.add(sphere(0.065, bm, -0.21, 0.42, 0.03));                  // arms
+  g.add(sphere(0.065, bm,  0.21, 0.42, 0.03));
+  const head = sphere(headR, bm, 0, 0.68, 0);
+  g.add(head);
+  return {g, bm, head};
+}
+function makeQuokka(){
+  const {g, bm} = animalBase(0x9c7a52, 0xd9c3a3);
+  const em = std(0x8a6a45);
+  g.add(sphere(0.05, em, -0.11, 0.83, -0.01)); // round ears
+  g.add(sphere(0.05, em,  0.11, 0.83, -0.01));
+  g.add(sphere(0.075, std(0xd9c3a3), 0, 0.63, 0.13, 1, 0.85, 0.8)); // muzzle
+  g.add(sphere(0.023, std(0x27170c), 0, 0.68, 0.19)); // nose
+  // signature quokka smile
+  const smile = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 8, 20, Math.PI), std(0x27170c));
+  smile.position.set(0, 0.63, 0.185); smile.rotation.x = Math.PI; smile.rotation.z = Math.PI;
+  g.add(smile);
+  eyes(g, 0.73, 0.145, 0.07);
+  racket(g, 0.27, 0.42, 0.1);
+  return g;
+}
+function makePanda(){
+  const {g} = animalBase(0xf5f5f5, null);
+  const blk = std(0x1c1c1c);
+  g.add(sphere(0.055, blk, -0.12, 0.83, 0)); // ears
+  g.add(sphere(0.055, blk,  0.12, 0.83, 0));
+  g.add(sphere(0.045, blk, -0.07, 0.71, 0.135, 1, 1.3, 0.55)); // eye patches
+  g.add(sphere(0.045, blk,  0.07, 0.71, 0.135, 1, 1.3, 0.55));
+  eyes(g, 0.715, 0.165, 0.07, 0.02);
+  g.add(sphere(0.026, blk, 0, 0.64, 0.165)); // nose
+  g.add(sphere(0.07, blk, -0.21, 0.42, 0.03)); // black arms
+  g.add(sphere(0.07, blk,  0.21, 0.42, 0.03));
+  racket(g, 0.27, 0.42, 0.1);
+  return g;
+}
+function makeRabbit(){
+  const {g, bm} = animalBase(0xe8e2da, 0xfcf9f5);
+  const inner = std(0xf3b8c4);
+  for (const sx of [-1, 1]){
+    const ear = sphere(0.05, bm, sx*0.08, 1.0, -0.01, 1, 3.2, 0.7);
+    const inr = sphere(0.028, inner, sx*0.08, 1.0, 0.02, 1, 2.6, 0.5);
+    g.add(ear, inr);
+  }
+  g.add(sphere(0.03, inner, 0, 0.64, 0.165)); // nose
+  eyes(g, 0.71, 0.15, 0.07);
+  g.add(sphere(0.06, std(0xffffff), 0, 0.28, -0.19)); // tail
+  racket(g, 0.27, 0.42, 0.1);
+  return g;
+}
+function makeElephant(){
+  const {g, bm} = animalBase(0x9aa7b8, 0xc6cfda, 0.18);
+  for (const sx of [-1, 1]){ // big ears
+    const ear = sphere(0.11, bm, sx*0.19, 0.72, -0.02, 0.5, 1.1, 1);
+    const inr = sphere(0.08, std(0xc4a2ac), sx*0.2, 0.72, 0, 0.35, 0.9, 0.8);
+    g.add(ear, inr);
+  }
+  // trunk — curved segments
+  const trunk = new THREE.Group();
+  const pts = [new THREE.Vector3(0,0.66,0.16), new THREE.Vector3(0,0.55,0.24),
+               new THREE.Vector3(0,0.45,0.25), new THREE.Vector3(0,0.4,0.19)];
+  const tg = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 16, 0.045, 12, false), bm);
+  tg.castShadow = true; trunk.add(tg);
+  g.add(trunk);
+  eyes(g, 0.73, 0.155, 0.075);
+  racket(g, 0.28, 0.42, 0.1);
+  return g;
+}
+function makeBear(){
+  const {g, bm} = animalBase(0x8a5a2b, 0xc99e6a);
+  const inner = std(0xc99e6a);
+  g.add(sphere(0.06, bm, -0.12, 0.83, 0));
+  g.add(sphere(0.06, bm,  0.12, 0.83, 0));
+  g.add(sphere(0.035, inner, -0.12, 0.83, 0.035));
+  g.add(sphere(0.035, inner,  0.12, 0.83, 0.035));
+  g.add(sphere(0.07, inner, 0, 0.64, 0.13, 1, 0.8, 0.75)); // muzzle
+  g.add(sphere(0.028, std(0x27170c), 0, 0.675, 0.19));
+  eyes(g, 0.73, 0.15, 0.07);
+  racket(g, 0.27, 0.42, 0.1);
+  return g;
+}
+function makePenguin(){
+  const {g} = animalBase(0x20242c, 0xfafafa, 0.16);
+  const orange = std(0xf5a623);
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.09, 12), orange);
+  beak.rotation.x = Math.PI/2; beak.position.set(0, 0.66, 0.19); beak.castShadow = true;
+  g.add(beak);
+  g.add(sphere(0.07, orange, -0.11, 0.03, 0.05, 1, 0.4, 1.5)); // feet
+  g.add(sphere(0.07, orange,  0.11, 0.03, 0.05, 1, 0.4, 1.5));
+  g.add(sphere(0.05, std(0x20242c), -0.22, 0.4, 0.02, 0.5, 1.8, 1)); // flippers
+  g.add(sphere(0.05, std(0x20242c),  0.22, 0.4, 0.02, 0.5, 1.8, 1));
+  g.add(sphere(0.13, std(0xfafafa), 0, 0.65, 0.075, 0.85, 0.9, 0.6)); // face patch
+  eyes(g, 0.71, 0.14, 0.065);
+  racket(g, 0.28, 0.42, 0.1);
+  return g;
+}
+const CHAR_BUILDERS = {
+  male:   () => makeHuman(false, 0x2e6df6, 0x1e2a3a),
+  female: () => makeHuman(true,  0xe84d7a, 0x2b2140),
+  quokka: makeQuokka, panda: makePanda, rabbit: makeRabbit,
+  elephant: makeElephant, bear: makeBear, penguin: makePenguin
+};
+const CHAR_LABELS = {male:'Male', female:'Female', quokka:'Quokka', panda:'Panda',
+  rabbit:'Rabbit', elephant:'Elephant', bear:'Bear', penguin:'Penguin'};
+const TAG_COLORS = ['#ff6b35','#2ec4b6','#3a86ff','#ffbe0b','#8338ec','#fb5607'];
+
+function makeTag(text, color){
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
+  const c = cv.getContext('2d');
+  c.fillStyle = color;
+  c.beginPath(); c.roundRect(48, 24, 160, 64, 28); c.fill();
+  c.fillStyle = '#fff'; c.font = 'bold 44px Segoe UI, sans-serif';
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText(text, 128, 58);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cv), depthTest:false}));
+  sp.scale.set(0.7, 0.35, 1);
+  sp.position.y = 1.45;
+  return sp;
+}
+
+/* ================= PLAYERS & SHUTTLE ================= */
+const players = []; // {group, char, id}
+let nextId = 1, selectedPlayer = null;
+
+function addPlayer(char, x, z, ry = 0){
+  if (players.length >= 6) { alert('Maximum 6 players on court.'); return null; }
+  const group = CHAR_BUILDERS[char]();
+  const id = nextId++;
+  const color = TAG_COLORS[(id-1) % TAG_COLORS.length];
+  group.add(makeTag('P'+id, color));
+  // default position: alternate sides
+  if (x === undefined){
+    const side = players.length % 2 === 0 ? 1 : -1;
+    x = (players.length % 3 - 1) * 1.6;
+    z = side * 3;
+    ry = side > 0 ? Math.PI : 0;
+  }
+  group.position.set(x, 0, z);
+  group.rotation.y = ry;
+  group.traverse(o => { o.userData.playerRoot = group; });
+  group.userData = {isPlayer:true, char, id, color};
+  scene.add(group);
+  players.push(group);
+  refreshPlayerList();
+  return group;
+}
+function removePlayer(group){
+  scene.remove(group);
+  players.splice(players.indexOf(group), 1);
+  if (selectedPlayer === group) selectedPlayer = null;
+  refreshPlayerList();
+}
+function refreshPlayerList(){
+  const el = document.getElementById('playerList');
+  el.innerHTML = '';
+  for (const p of players){
+    const d = document.createElement('div');
+    d.className = 'pItem' + (p === selectedPlayer ? ' sel' : '');
+    d.innerHTML = `<div class="dot" style="background:${p.userData.color}"></div>
+      <span>P${p.userData.id} · ${CHAR_LABELS[p.userData.char]}</span>`;
+    const rot = document.createElement('button'); rot.textContent = '⟳';
+    rot.title = 'Rotate 45°';
+    rot.onclick = e => { e.stopPropagation(); p.rotation.y += Math.PI/4; };
+    const rm = document.createElement('button'); rm.textContent = '✕';
+    rm.onclick = e => { e.stopPropagation(); removePlayer(p); };
+    d.append(rot, rm);
+    d.onclick = () => { selectedPlayer = (selectedPlayer === p ? null : p); refreshPlayerList(); };
+    el.appendChild(d);
+  }
+}
+
+/* Shuttle */
+function makeShuttle(){
+  const g = new THREE.Group();
+  const cork = sphere(0.055, std(0xf0f0e8), 0, 0.055, 0);
+  const band = cyl(0.056, 0.056, 0.03, std(0x2e6df6), 0, 0.085, 0);
+  const skirt = new THREE.Mesh(
+    new THREE.ConeGeometry(0.11, 0.16, 16, 1, true),
+    new THREE.MeshStandardMaterial({color:0xffffff, side:THREE.DoubleSide, transparent:true, opacity:0.92, roughness:0.6})
+  );
+  skirt.position.y = 0.18; skirt.rotation.x = Math.PI; skirt.castShadow = true;
+  g.add(cork, band, skirt);
+  g.scale.setScalar(1.6); // slightly oversized for visibility
+  g.userData = {isShuttle:true};
+  g.traverse(o => { o.userData.shuttleRoot = g; });
+  return g;
+}
+const shuttle = makeShuttle();
+shuttle.position.set(0.8, 0, 2.6);
+scene.add(shuttle);
+
+/* ================= DRAWING (lines & arrows) ================= */
+const drawings = [];   // {type, points:[[x,z]..], color, object}
+const drawGroup = new THREE.Group();
+scene.add(drawGroup);
+let drawColor = '#ffe100';
+
+function buildLineMesh(pts2, color){
+  if (pts2.length < 2) return null;
+  const v = pts2.map(p => new THREE.Vector3(p[0], 0.03, p[1]));
+  const curve = new THREE.CatmullRomCurve3(v);
+  const geo = new THREE.TubeGeometry(curve, Math.max(16, v.length*3), 0.035, 8, false);
+  return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color}));
+}
+function buildArrowMesh(a, b, color){
+  const g = new THREE.Group();
+  const A = new THREE.Vector3(a[0], 0.03, a[1]), B = new THREE.Vector3(b[0], 0.03, b[1]);
+  const dir = B.clone().sub(A); const len = dir.length();
+  if (len < 0.15) return null;
+  dir.normalize();
+  const headLen = Math.min(0.45, len*0.35);
+  const shaftEnd = B.clone().sub(dir.clone().multiplyScalar(headLen));
+  const mat = new THREE.MeshBasicMaterial({color});
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, A.distanceTo(shaftEnd), 10), mat);
+  shaft.position.copy(A.clone().add(shaftEnd).multiplyScalar(0.5));
+  shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.13, headLen, 14), mat);
+  head.position.copy(shaftEnd.clone().add(dir.clone().multiplyScalar(headLen/2)));
+  head.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+  g.add(shaft, head);
+  return g;
+}
+function addDrawing(type, points, color){
+  const obj = type === 'arrow'
+    ? buildArrowMesh(points[0], points[points.length-1], color)
+    : buildLineMesh(points, color);
+  if (!obj) return;
+  drawGroup.add(obj);
+  drawings.push({type, points, color, object:obj});
+}
+function undoDrawing(){
+  const d = drawings.pop();
+  if (d) drawGroup.remove(d.object);
+}
+function clearDrawings(){
+  for (const d of drawings) drawGroup.remove(d.object);
+  drawings.length = 0;
+}
+
+/* ================= INTERACTION ================= */
+let mode = 'move'; // move | line | arrow
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+let dragging = null, drawPts = null, previewObj = null;
+
+function setMode(m){
+  mode = m;
+  for (const [id, mm] of [['toolMove','move'],['toolLine','line'],['toolArrow','arrow']])
+    document.getElementById(id).classList.toggle('active', mm === m);
+  controls.enabled = (m === 'move');
+  document.getElementById('hint').textContent =
+    m === 'move' ? 'Rotate: drag · Zoom: scroll/pinch · Pan: right-drag · Move mode: drag a player or the shuttle'
+    : m === 'line' ? 'Line mode: click-drag on the court to draw. Switch to Move to rotate the camera.'
+    : 'Arrow mode: press where the arrow starts, drag, release at the target.';
+}
+function pointerNDC(e){
+  const r = canvas.getBoundingClientRect();
+  ndc.x = ((e.clientX - r.left)/r.width)*2 - 1;
+  ndc.y = -((e.clientY - r.top)/r.height)*2 + 1;
+  ray.setFromCamera(ndc, camera);
+}
+function groundPoint(){
+  const p = new THREE.Vector3();
+  return ray.ray.intersectPlane(groundPlane, p) ? p : null;
+}
+
+canvas.addEventListener('pointerdown', e => {
+  pointerNDC(e);
+  if (mode === 'move'){
+    const hits = ray.intersectObjects([...players, shuttle], true);
+    if (hits.length){
+      const root = hits[0].object.userData.playerRoot || hits[0].object.userData.shuttleRoot;
+      if (root){
+        dragging = root;
+        controls.enabled = false;
+        canvas.setPointerCapture(e.pointerId);
+      }
+    }
+  } else {
+    const p = groundPoint();
+    if (p){
+      drawPts = [[p.x, p.z]];
+      canvas.setPointerCapture(e.pointerId);
+    }
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  if (!dragging && !drawPts) return;
+  pointerNDC(e);
+  const p = groundPoint();
+  if (!p) return;
+  if (dragging){
+    dragging.position.x = THREE.MathUtils.clamp(p.x, -HALF_W-2, HALF_W+2);
+    dragging.position.z = THREE.MathUtils.clamp(p.z, -HALF_L-2, HALF_L+2);
+  } else if (drawPts){
+    const last = drawPts[drawPts.length-1];
+    if (Math.hypot(p.x-last[0], p.z-last[1]) > 0.08) drawPts.push([p.x, p.z]);
+    if (previewObj) drawGroup.remove(previewObj);
+    previewObj = mode === 'arrow'
+      ? buildArrowMesh(drawPts[0], [p.x, p.z], drawColor)
+      : buildLineMesh(drawPts, drawColor);
+    if (previewObj) drawGroup.add(previewObj);
+  }
+});
+function endPointer(){
+  if (dragging){
+    dragging = null;
+    if (mode === 'move') controls.enabled = true;
+  }
+  if (drawPts){
+    if (previewObj){ drawGroup.remove(previewObj); previewObj = null; }
+    if (drawPts.length >= 2) addDrawing(mode === 'arrow' ? 'arrow' : 'line', drawPts, drawColor);
+    drawPts = null;
+  }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+
+/* ================= UI WIRING ================= */
+document.getElementById('toolMove').onclick = () => setMode('move');
+document.getElementById('toolLine').onclick = () => setMode('line');
+document.getElementById('toolArrow').onclick = () => setMode('arrow');
+document.getElementById('toolUndo').onclick = undoDrawing;
+document.getElementById('toolClear').onclick = clearDrawings;
+document.getElementById('toolTop').onclick = () => {
+  camera.position.set(0, 18, 0.01); controls.target.set(0,0,0);
+};
+document.getElementById('tool3D').onclick = () => {
+  camera.position.set(9, 9, 12); controls.target.set(0,0,0);
+};
+document.getElementById('addPlayer').onclick = () =>
+  addPlayer(document.getElementById('charSelect').value);
+
+document.getElementById('colBg').oninput = e => scene.background.set(e.target.value);
+document.getElementById('colCourt').oninput = e => courtMat.color.set(e.target.value);
+document.getElementById('colFloor').oninput = e => floorMat.color.set(e.target.value);
+document.getElementById('colDraw').oninput = e => drawColor = e.target.value;
+
+/* ================= FORMATIONS (save / load) ================= */
+const LS_KEY = 'b4k_formations_v1';
+function getForms(){ try{ return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch{ return []; } }
+function setForms(f){ localStorage.setItem(LS_KEY, JSON.stringify(f)); }
+
+function snapshot(name){
+  return {
+    name, savedAt: new Date().toISOString(),
+    players: players.map(p => ({char:p.userData.char, x:+p.position.x.toFixed(3), z:+p.position.z.toFixed(3), ry:+p.rotation.y.toFixed(3)})),
+    shuttle: {x:+shuttle.position.x.toFixed(3), z:+shuttle.position.z.toFixed(3)},
+    drawings: drawings.map(d => ({type:d.type, color:d.color, points:d.points.map(pt => [+pt[0].toFixed(3), +pt[1].toFixed(3)])})),
+    notes: document.getElementById('notes').value,
+    colors: {
+      bg: document.getElementById('colBg').value,
+      court: document.getElementById('colCourt').value,
+      floor: document.getElementById('colFloor').value,
+      draw: document.getElementById('colDraw').value
+    }
+  };
+}
+function applySnapshot(s){
+  while (players.length) removePlayer(players[0]);
+  nextId = 1;
+  for (const p of s.players || []) addPlayer(p.char, p.x, p.z, p.ry);
+  if (s.shuttle) shuttle.position.set(s.shuttle.x, 0, s.shuttle.z);
+  clearDrawings();
+  for (const d of s.drawings || []) addDrawing(d.type, d.points, d.color);
+  document.getElementById('notes').value = s.notes || '';
+  const c = s.colors || {};
+  for (const [id, apply] of [
+    ['colBg', v => scene.background.set(v)],
+    ['colCourt', v => courtMat.color.set(v)],
+    ['colFloor', v => floorMat.color.set(v)],
+    ['colDraw', v => drawColor = v]
+  ]){
+    const key = {colBg:'bg', colCourt:'court', colFloor:'floor', colDraw:'draw'}[id];
+    if (c[key]){ document.getElementById(id).value = c[key]; apply(c[key]); }
+  }
+}
+function refreshFormList(){
+  const el = document.getElementById('formList');
+  el.innerHTML = '';
+  for (const f of getForms()){
+    const d = document.createElement('div');
+    d.className = 'fItem';
+    d.innerHTML = `<span title="${f.name}">${f.name}</span>`;
+    const load = document.createElement('button'); load.textContent = 'Load';
+    load.onclick = () => applySnapshot(f);
+    const del = document.createElement('button'); del.textContent = '✕';
+    del.onclick = () => {
+      if (!confirm(`Delete formation "${f.name}"?`)) return;
+      setForms(getForms().filter(x => x.name !== f.name || x.savedAt !== f.savedAt));
+      refreshFormList();
+    };
+    d.append(load, del);
+    el.appendChild(d);
+  }
+}
+document.getElementById('saveForm').onclick = () => {
+  const name = document.getElementById('formName').value.trim() || 'Formation ' + (getForms().length+1);
+  const forms = getForms().filter(f => f.name !== name);
+  forms.push(snapshot(name));
+  setForms(forms);
+  document.getElementById('formName').value = '';
+  refreshFormList();
+};
+document.getElementById('exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify(getForms(), null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'b4k-formations.json';
+  a.click();
+};
+document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
+document.getElementById('importFile').onchange = e => {
+  const file = e.target.files[0]; if (!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try{
+      const incoming = JSON.parse(rd.result);
+      if (!Array.isArray(incoming)) throw 0;
+      const merged = getForms();
+      for (const f of incoming)
+        if (!merged.some(x => x.name === f.name && x.savedAt === f.savedAt)) merged.push(f);
+      setForms(merged);
+      refreshFormList();
+    } catch { alert('Invalid formations file.'); }
+  };
+  rd.readAsText(file);
+  e.target.value = '';
+};
+refreshFormList();
+
+/* ================= START STATE ================= */
+addPlayer('panda', -1.5, 3.2, Math.PI);
+addPlayer('quokka', 1.5, 3.2, Math.PI);
+addPlayer('rabbit', -1.5, -3.2, 0);
+addPlayer('penguin', 1.5, -3.2, 0);
+
+/* ================= RENDER LOOP ================= */
+function resize(){
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.floor(w*renderer.getPixelRatio()) || canvas.height !== Math.floor(h*renderer.getPixelRatio())){
+    renderer.setSize(w, h, false);
+    camera.aspect = w/h;
+    camera.updateProjectionMatrix();
+  }
+}
+new ResizeObserver(resize).observe(canvas);
+(function loop(){
+  requestAnimationFrame(loop);
+  resize();
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
