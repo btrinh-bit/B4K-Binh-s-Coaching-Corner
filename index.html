@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito:wght@500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
 <style>
 :root{
   --paper:#FFF9EE; --paper2:#FFF3D9; --ink:#3B2B4F; --ink-dim:#8a7ba3;
@@ -240,6 +241,7 @@ body.drawing #drawpill{display:flex}
   <button data-pane="draw" aria-pressed="false" aria-label="Draw"><span class="ico">✏️</span></button>
   <button data-pane="notes" aria-pressed="false" aria-label="Notes"><span class="ico">📌</span></button>
   <button data-pane="presets" aria-pressed="false" aria-label="Save and presets"><span class="ico">💾</span></button>
+  <button data-pane="playback" aria-pressed="false" aria-label="Drills and playback"><span class="ico">🎬</span></button>
 </nav>
 
 <aside id="sheet" role="dialog" aria-label="Controls panel">
@@ -285,10 +287,17 @@ body.drawing #drawpill{display:flex}
           <label class="pick"><input type="color" id="colEnv" value="#9B2D2D">Surroundings</label>
         </div>
       </div>
+      <div class="sec"><h3>Arena</h3>
+        <button class="ghost" id="btnArena" aria-pressed="false">Arena crowd: off</button>
+        <div class="sg" style="margin-top:6px">Tournament hall with a watching crowd.</div></div>
     </section>
 
     <section class="pane" data-p="presets">
       <button class="bigbtn" id="btnSave2">Save current setup</button>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="btnSaveDefault">⭐ Save as my default</button>
+        <button class="ghost" id="btnClearDefault">Clear default</button>
+      </div>
       <div class="row" style="margin-top:8px">
         <button class="ghost" id="btnImport">Import .json</button>
         <input type="file" id="fileImport" accept=".json" class="sr">
@@ -302,6 +311,32 @@ body.drawing #drawpill{display:flex}
       <div class="sec"><h3>Pinned notes</h3>
         <button class="bigbtn" id="btnAddPin" style="margin-bottom:10px">＋ Add pinned note</button>
         <div id="pinList" class="presets"><div class="empty">No pins yet — add one here or use the Note pin tool in Draw.</div></div></div>
+    </section>
+
+    <section class="pane" data-p="playback">
+      <div class="sec"><h3>Drill library</h3>
+        <div class="presets" id="drillList"></div></div>
+      <div class="sec"><h3>Playback</h3>
+        <div class="row">
+          <button class="bigbtn" id="pbPlay">▶ Play</button></div>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" id="pbStop">Stop</button>
+          <button class="ghost" id="pbLoop" aria-pressed="false">Loop: off</button>
+          <button class="ghost" id="pbReset">Reset board</button></div></div>
+      <div class="sec"><h3>Make your own</h3>
+        <div class="row">
+          <button class="ghost" id="pbCapture">＋ Capture frame</button>
+          <button class="ghost" id="pbPlayMine">▶ Play mine</button>
+          <button class="ghost" id="pbClear">Clear</button></div>
+        <div id="pbFrames" class="sg" style="margin-top:6px">0 frames captured</div></div>
+      <div class="sec"><h3>Target zones</h3>
+        <button class="ghost" id="pbZones" aria-pressed="false">Show zones</button>
+        <div class="sg" style="margin-top:6px">Front · Mid · Rear, both halves</div></div>
+      <div class="sec"><h3>Export (adds B4K logo)</h3>
+        <div class="row">
+          <button class="ghost" id="pbPNG">📷 PNG image</button>
+          <button class="ghost" id="pbGIF">🎞 Animated GIF</button></div>
+        <div class="sg" style="margin-top:6px">GIF captures the loaded drill playing.</div></div>
     </section>
 
   </div>
@@ -371,7 +406,7 @@ if(!store.k)toast('Storage unavailable — presets will last this session only')
    SCENE
    ================================================================ */
 const stage=$('#stage');
-const renderer=new THREE.WebGLRenderer({antialias:true});
+const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 /* shadows fully disabled — flat presentation everywhere */
 stage.appendChild(renderer.domElement);
@@ -1327,6 +1362,234 @@ addPlayer('quokka',RED,[-1.5,-3.3]); addPlayer('elephant',RED,[1.5,-3.3]);
 addPlayer('lemur',BLUE,[-1.5,3.3]); addPlayer('panda',BLUE,[1.5,3.3]);
 renderPresets(); syncPins(); resize();
 
+
+/* ================================================================
+   V3 — target zones, drill playback, export, library
+   ================================================================ */
+const zoneGroup=new THREE.Group(); zoneGroup.visible=false; courtGroup.add(zoneGroup);
+(function buildZones(){
+  const HWz=3.0, bands=[[0,1.98,0x39C0C0],[1.98,4.34,0xF2C14E],[4.34,6.55,0xE0645B]];
+  [1,-1].forEach(side=>bands.forEach(([z0,z1,c])=>{
+    const m=new THREE.Mesh(new THREE.PlaneGeometry(HWz*2,(z1-z0)-0.06),
+      new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:0.22,side:THREE.DoubleSide,depthWrite:false}));
+    m.rotation.x=-Math.PI/2; m.position.set(0,0.066,side*(z0+z1)/2); zoneGroup.add(m);
+  }));
+})();
+
+const PB={playing:false,frames:null,dur:0,t0:0,loop:false,onProg:null};
+let currentSeq=null, userFrames=[];
+const seqTotal=F=>F.reduce((a,f)=>a+(f.dur||1000),0);
+const ease=t=>t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const slotPlayer=id=>players.find(p=>p.id===id);
+function applyFrames(F,tt){
+  let acc=0,i=0; for(;i<F.length-1;i++){const d=F[i].dur||1000; if(tt<acc+d)break; acc+=d;}
+  const a=F[i], b=F[Math.min(i+1,F.length-1)], d=(a.dur||1000);
+  const lt=ease(Math.min(1,Math.max(0,(tt-acc)/d)));
+  for(const id in a.pos){const pa=a.pos[id], pb=(b.pos&&b.pos[id])||pa, pl=slotPlayer(+id);
+    if(pl){pl.group.position.x=lerp(pa[0],pb[0],lt); pl.group.position.z=lerp(pa[1],pb[1],lt); faceOpponents(pl.group);}}
+  if(a.shuttle&&b.shuttle){const sx=lerp(a.shuttle[0],b.shuttle[0],lt), sz=lerp(a.shuttle[1],b.shuttle[1],lt);
+    shuttle.position.set(sx,0.16+Math.sin(lt*Math.PI)*1.1,sz);}
+}
+function startPlayback(F,opts){opts=opts||{}; if(!F||F.length<2){toast('Need at least 2 frames');return;}
+  PB.frames=F; PB.dur=seqTotal(F); PB.loop=!!opts.loop; PB.onProg=opts.onProg||null; PB.t0=performance.now(); PB.playing=true;}
+function stopPlayback(){PB.playing=false;}
+function stepPlayback(now){let tt=now-PB.t0;
+  if(tt>=PB.dur){ if(PB.loop){PB.t0=now;tt=0;} else {applyFrames(PB.frames,PB.dur); PB.playing=false; if(PB.onProg)PB.onProg(1); return;} }
+  applyFrames(PB.frames,tt); if(PB.onProg)PB.onProg(tt/PB.dur);}
+
+function loadSequence(seq){stopPlayback(); players.slice().forEach(p=>removePlayer(p,true));
+  const f0=seq.frames[0];
+  seq.roster.forEach(r=>{const pos=f0.pos[r.id]||[0,0]; addPlayer(r.avatar,r.color,[pos[0],pos[1]],r.id,r.name);});
+  if(f0.shuttle)shuttle.position.set(f0.shuttle[0],0.16,f0.shuttle[1]);
+  currentSeq=seq; userFrames=[]; renderFrameCount(); toast(seq.name+' loaded');}
+function captureFrame(){const pos={}; players.forEach(p=>pos[p.id]=[+p.group.position.x.toFixed(2),+p.group.position.z.toFixed(2)]);
+  userFrames.push({pos,shuttle:[+shuttle.position.x.toFixed(2),+shuttle.position.z.toFixed(2)],dur:1200});
+  currentSeq=null; renderFrameCount(); toast('Frame '+userFrames.length+' captured');}
+function renderFrameCount(){const el=$('#pbFrames'); if(el)el.textContent=(userFrames.length||0)+' frames captured';}
+
+/* ---- export (branded) ---- */
+function drawWatermark(x,w,h){const logo=document.getElementById('logo'); const s=Math.max(26,h*0.075);
+  x.save(); x.globalAlpha=0.95;
+  if(logo&&logo.complete&&logo.naturalWidth){const lw=s, lh=s*(logo.naturalHeight/logo.naturalWidth);
+    x.drawImage(logo,14,h-lh-12,lw,lh);}
+  x.font='600 '+Math.round(s*0.5)+"px Fredoka,Arial"; x.textAlign='left'; x.textBaseline='alphabetic';
+  x.fillStyle='rgba(255,255,255,0.95)'; x.fillText("Binh’s Coaching Corner", 14+s+10, h-18); x.restore();}
+function exportPNG(){renderer.render(scene,camera);
+  const w=renderer.domElement.width, h=renderer.domElement.height;
+  const c=document.createElement('canvas'); c.width=w; c.height=h; const x=c.getContext('2d');
+  x.drawImage(renderer.domElement,0,0); drawWatermark(x,w,h);
+  const a=document.createElement('a'); a.download='b4k-drill.png'; a.href=c.toDataURL('image/png'); a.click(); toast('PNG saved ✓');}
+async function exportGIF(){
+  const F=currentSeq?currentSeq.frames:(userFrames.length>=2?userFrames:null);
+  if(!F){toast('Load a drill or capture 2+ frames first');return;}
+  if(typeof GIF==='undefined'){toast('GIF library not loaded — check connection');return;}
+  toast('Rendering GIF…');
+  let workerUrl; try{const r=await fetch('https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'); workerUrl=URL.createObjectURL(await r.blob());}
+  catch(e){toast('GIF worker failed to load');return;}
+  const sc=0.5, w=Math.round(renderer.domElement.width*sc), h=Math.round(renderer.domElement.height*sc);
+  const gif=new GIF({workers:2,quality:12,workerScript:workerUrl,width:w,height:h});
+  const total=seqTotal(F), fps=12, n=Math.min(96,Math.max(12,Math.round(total/1000*fps)));
+  const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h; const tx=tmp.getContext('2d');
+  const wasPlaying=PB.playing; PB.playing=false;
+  for(let k=0;k<=n;k++){applyFrames(F,total*k/n); renderer.render(scene,camera);
+    tx.drawImage(renderer.domElement,0,0,w,h); drawWatermark(tx,w,h);
+    gif.addFrame(tx,{copy:true,delay:Math.round(1000/fps)});}
+  gif.on('finished',b=>{const a=document.createElement('a'); a.download='b4k-drill.gif'; a.href=URL.createObjectURL(b); a.click(); toast('GIF ready ✓');});
+  gif.render();
+}
+
+/* ---- prebuilt library ---- */
+const CR='#FF5A5A', CB='#3B82F6', CT='#2DD4BF';
+const LIBRARY=[
+ {name:'4-corner footwork',tag:'Footwork · 1 player',
+  roster:[{id:1,avatar:'quokka',color:CR,name:'You'}],
+  frames:[
+   {pos:{1:[0,3.3]},shuttle:[0,3.3],dur:600},
+   {pos:{1:[2.2,5.8]},shuttle:[2.2,5.8],dur:900},
+   {pos:{1:[0,3.3]},shuttle:[0,-1.5],dur:800},
+   {pos:{1:[-2.2,5.8]},shuttle:[-2.2,5.8],dur:900},
+   {pos:{1:[0,3.3]},shuttle:[0,-1.5],dur:800},
+   {pos:{1:[2.2,1.2]},shuttle:[2.2,1.2],dur:900},
+   {pos:{1:[0,3.3]},shuttle:[0,-1.5],dur:800},
+   {pos:{1:[-2.2,1.2]},shuttle:[-2.2,1.2],dur:900},
+   {pos:{1:[0,3.3]},shuttle:[0,3.3],dur:700}]},
+ {name:'Doubles front-back rotation',tag:'Rotation · 2 players',
+  roster:[{id:1,avatar:'panda',color:CB,name:'A'},{id:2,avatar:'lemur',color:CT,name:'B'}],
+  frames:[
+   {pos:{1:[-1.5,3.6],2:[1.5,3.6]},shuttle:[0,-1],dur:800},
+   {pos:{1:[0,1.6],2:[0,4.6]},shuttle:[0,-3],dur:900},
+   {pos:{1:[0.3,1.6],2:[1.7,5.2]},shuttle:[1.7,5.2],dur:900},
+   {pos:{1:[-1.4,4.6],2:[0,1.6]},shuttle:[0,-3],dur:1000},
+   {pos:{1:[-1.5,3.6],2:[1.5,3.6]},shuttle:[0,0.5],dur:800}]},
+ {name:'Doubles service positions',tag:'Serve · 2 players',
+  roster:[{id:1,avatar:'quokka',color:CR,name:'Server'},{id:2,avatar:'elephant',color:CB,name:'Receiver'}],
+  frames:[
+   {pos:{1:[0.9,1.0],2:[0.9,-1.0]},shuttle:[0.9,1.0],dur:1000},
+   {pos:{1:[0.9,1.0],2:[0.9,-1.0]},shuttle:[0.9,-1.2],dur:700},
+   {pos:{1:[0,3.0],2:[0.9,-3.5]},shuttle:[0.9,-1.2],dur:900}]},
+ {name:'Rally — court coverage',tag:'Movement demo · singles',
+  roster:[{id:1,avatar:'quokka',color:CR,name:'Red'},{id:2,avatar:'fennec',color:CB,name:'Blue'}],
+  frames:[
+   {pos:{1:[0,3.2],2:[0,-3.2]},shuttle:[0,3.2],dur:600},
+   {pos:{1:[0,3.0],2:[0.6,-5.6]},shuttle:[0.5,-5.8],dur:1000},
+   {pos:{1:[-1.6,5.6],2:[0,-3.0]},shuttle:[-1.4,5.6],dur:1000},
+   {pos:{1:[-1.0,3.0],2:[-1.2,-1.2]},shuttle:[-1.2,-1.0],dur:900},
+   {pos:{1:[1.0,1.2],2:[0,-2.4]},shuttle:[1.0,1.0],dur:900},
+   {pos:{1:[0.4,3.0],2:[1.6,-5.6]},shuttle:[1.6,-5.6],dur:1000},
+   {pos:{1:[1.4,2.6],2:[1.0,-2.6]},shuttle:[1.4,2.6],dur:700},
+   {pos:{1:[0.6,1.6],2:[0.8,-1.2]},shuttle:[0.6,-1.0],dur:800},
+   {pos:{1:[0,3.2],2:[0,-3.2]},shuttle:[0,0],dur:800}]}
+];
+function renderDrills(){const host=$('#drillList'); if(!host)return; host.innerHTML='';
+  LIBRARY.forEach(seq=>{const d=document.createElement('button'); d.className='preset';
+    d.innerHTML='<div class="info"><b>'+seq.name+'</b><span>'+seq.tag+'</span></div><div class="chip">Load ▶</div>';
+    d.onclick=()=>{loadSequence(seq); startPlayback(seq.frames,{loop:pbLoopOn});}; host.appendChild(d);});}
+
+/* ---- wiring ---- */
+let pbLoopOn=false;
+function wirePB(){
+  renderDrills();
+  $('#pbPlay').onclick=()=>{const F=currentSeq?currentSeq.frames:userFrames; startPlayback(F,{loop:pbLoopOn});};
+  $('#pbPlayMine').onclick=()=>startPlayback(userFrames,{loop:pbLoopOn});
+  $('#pbStop').onclick=()=>{stopPlayback(); toast('Stopped');};
+  $('#pbLoop').onclick=e=>{pbLoopOn=!pbLoopOn; PB.loop=pbLoopOn; e.currentTarget.setAttribute('aria-pressed',String(pbLoopOn)); e.currentTarget.textContent='Loop: '+(pbLoopOn?'on':'off');};
+  $('#pbReset').onclick=()=>{stopPlayback(); if(currentSeq)loadSequence(currentSeq);};
+  $('#pbCapture').onclick=captureFrame;
+  $('#pbClear').onclick=()=>{userFrames=[]; renderFrameCount(); toast('Cleared');};
+  $('#pbZones').onclick=e=>{zoneGroup.visible=!zoneGroup.visible; e.currentTarget.setAttribute('aria-pressed',String(zoneGroup.visible)); e.currentTarget.textContent=zoneGroup.visible?'Hide zones':'Show zones';};
+  $('#pbPNG').onclick=exportPNG;
+  $('#pbGIF').onclick=exportGIF;
+}
+wirePB();
+
+
+/* ================================================================
+   V3.1 — tournament arena, save-default, email gate
+   ================================================================ */
+const arenaGroup=new THREE.Group(); courtGroup.add(arenaGroup);
+let arenaOn=false, arenaFloorMat=null; const arenaTierMats=[];
+function _darkHex(hex,fac){const n=parseInt(String(hex).slice(1),16);
+  const r=Math.round((n>>16&255)*fac), g=Math.round((n>>8&255)*fac), b=Math.round((n&255)*fac);
+  return (r<<16|g<<8|b);}
+function buildArena(){
+  arenaFloorMat=new THREE.MeshLambertMaterial({color:0x23242e});
+  const af=new THREE.Mesh(new THREE.PlaneGeometry(80,80),arenaFloorMat);
+  af.rotation.x=-Math.PI/2; af.position.y=-0.075; arenaGroup.add(af);
+  const seats=[];
+  function stand(kind,sign){for(let r=0;r<6;r++){const y=1.0+r*0.5, out=r*0.78;
+    const tm=new THREE.MeshLambertMaterial({color:0x34374c}); arenaTierMats.push(tm);
+    if(kind==='base'){const z=sign*(9.4+out);
+      const st=new THREE.Mesh(new THREE.BoxGeometry(27,0.45,0.72),tm); st.position.set(0,y-0.35,z); arenaGroup.add(st);
+      const n=48; for(let i=0;i<n;i++){if(Math.random()<0.1)continue; seats.push([-13+i*(26/n),y,z]);}
+    } else {const x=sign*(5.8+out);
+      const st=new THREE.Mesh(new THREE.BoxGeometry(0.72,0.45,21),tm); st.position.set(x,y-0.35,0); arenaGroup.add(st);
+      const n=40; for(let i=0;i<n;i++){if(Math.random()<0.1)continue; seats.push([x,y,-10+i*(20/n)]);}
+    }}}
+  stand('base',-1); stand('base',1); stand('side',-1); stand('side',1);
+  const N=seats.length, dummy=new THREE.Object3D(), col=new THREE.Color();
+  const mk=(geo)=>new THREE.InstancedMesh(geo,new THREE.MeshLambertMaterial({}),N);
+  const body=mk(new THREE.SphereGeometry(0.2,8,6)), head=mk(new THREE.SphereGeometry(0.17,8,6)),
+        earL=mk(new THREE.SphereGeometry(0.075,6,5)), earR=mk(new THREE.SphereGeometry(0.075,6,5)),
+        snout=mk(new THREE.SphereGeometry(0.06,6,5));
+  const jersey=[0xE24A4A,0xF2C14E,0x39C0C0,0x6C7BE0,0xE07BB0,0xF6A03A,0x8ED081,0xEDEDED];
+  const fur=[0xC49A6C,0x8C8C90,0xF4F4F0,0xE8B770,0x9AA0A8,0xF0D9A8,0xB07B3E,0xEDE3D2];
+  const place=(im,i,x,y,z,c)=>{dummy.position.set(x,y,z);dummy.updateMatrix();im.setMatrixAt(i,dummy.matrix);if(im.setColorAt){col.setHex(c);im.setColorAt(i,col);}};
+  seats.forEach((sp,i)=>{const x=sp[0],y=sp[1],z=sp[2];
+    const L=Math.hypot(x,z)||1, dx=-x/L, dz=-z/L, rx=dz, rz=-dx; /* dx,dz face court; rx,rz = side */
+    const jc=jersey[(Math.random()*jersey.length)|0], fc=fur[(Math.random()*fur.length)|0];
+    place(body,i,x,y+0.02,z,jc);
+    place(head,i,x,y+0.34,z,fc);
+    place(earL,i,x+rx*0.12-dx*0.03,y+0.5,z+rz*0.12-dz*0.03,fc);
+    place(earR,i,x-rx*0.12-dx*0.03,y+0.5,z-rz*0.12-dz*0.03,fc);
+    place(snout,i,x+dx*0.15,y+0.30,z+dz*0.15,fc);});
+  [body,head,earL,earR,snout].forEach(im=>{im.instanceMatrix.needsUpdate=true; if(im.instanceColor)im.instanceColor.needsUpdate=true; arenaGroup.add(im);});
+}
+function arenaTint(hex){try{if(arenaFloorMat)arenaFloorMat.color.setHex(_darkHex(hex,0.20));
+  arenaTierMats.forEach(m=>m.color.setHex(_darkHex(hex,0.34)));}catch(e){}}
+buildArena(); arenaGroup.visible=arenaOn;
+const _oldApplyEnv=applyEnv; applyEnv=function(h){_oldApplyEnv(h); arenaTint(h);};
+arenaTint(typeof curEnv!=='undefined'?curEnv:'#9B2D2D');
+function syncArenaBtn(){const b=$('#btnArena'); if(b){b.setAttribute('aria-pressed',String(arenaOn)); b.textContent='Arena crowd: '+(arenaOn?'on':'off');}}
+$('#btnArena')&&($('#btnArena').onclick=()=>{arenaOn=!arenaOn; arenaGroup.visible=arenaOn; syncArenaBtn(); toast(arenaOn?'Arena on':'Arena off');});
+syncArenaBtn();
+
+/* save-default */
+function saveDefault(){const d=serialize('My default'); d.arena=arenaOn; store.write('bcc:default',d); toast('Saved as your default ⭐');}
+function clearDefault(){store.write('bcc:default',null); toast('Default cleared');}
+function applyDefaultIfAny(){const d=store.read('bcc:default',null);
+  if(d&&d.players&&d.players.length){restore(d);
+    if(typeof d.arena==='boolean'){arenaOn=d.arena; arenaGroup.visible=arenaOn; syncArenaBtn();}}}
+$('#btnSaveDefault')&&($('#btnSaveDefault').onclick=saveDefault);
+$('#btnClearDefault')&&($('#btnClearDefault').onclick=clearDefault);
+
+/* email-capture gate — paste your Formspree/Google endpoint below to collect emails */
+const LEAD_ENDPOINT=''; /* e.g. 'https://formspree.io/f/xxxxxxx' */
+function initGate(){
+  let u=null; try{u=store.read('bcc:user',null);}catch(e){}
+  if(u&&u.email)return;
+  const ov=document.createElement('div'); ov.id='gate';
+  ov.style.cssText='position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:rgba(30,20,40,.72)';
+  ov.innerHTML='<div style="background:#FFF9EE;border:3px solid #3B2B4F;border-radius:22px;padding:22px;max-width:340px;width:88%;box-shadow:0 10px 0 #3B2B4F">'
+   +'<h2 style="font:600 20px Fredoka,Arial;color:#3B2B4F;margin:0 0 4px">Welcome to Binh’s Coaching Corner 🏸</h2>'
+   +'<p style="font:400 13px Fredoka,Arial;color:#6b5b73;margin:0 0 14px">Pop your details in to start coaching.</p>'
+   +'<input id="gName" placeholder="Your name" style="width:100%;padding:11px;border:2.5px solid #3B2B4F;border-radius:14px;margin-bottom:8px;font:400 15px Fredoka,Arial">'
+   +'<input id="gEmail" type="email" placeholder="Email" style="width:100%;padding:11px;border:2.5px solid #3B2B4F;border-radius:14px;margin-bottom:12px;font:400 15px Fredoka,Arial">'
+   +'<button id="gGo" style="width:100%;padding:12px;border-radius:16px;border:2.5px solid #3B2B4F;background:#C8F542;font:600 15px Fredoka,Arial;color:#2b2233;box-shadow:0 4px 0 #3B2B4F;cursor:pointer">Start coaching →</button>'
+   +'<div id="gErr" style="color:#c0392b;font:400 12px Fredoka,Arial;margin-top:8px;min-height:14px"></div></div>';
+  document.body.appendChild(ov);
+  const go=()=>{const name=ov.querySelector('#gName').value.trim(), email=ov.querySelector('#gEmail').value.trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ov.querySelector('#gErr').textContent='Please enter a valid email';return;}
+    const rec={name,email,ts:new Date().toISOString()}; try{store.write('bcc:user',rec);}catch(e){}
+    if(LEAD_ENDPOINT){fetch(LEAD_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({name,email,source:'B4K Coaching Corner'})}).catch(()=>{});}
+    ov.remove();};
+  ov.querySelector('#gGo').onclick=go;
+  ov.querySelector('#gEmail').onkeydown=e=>{if(e.key==='Enter')go();};
+  ov.querySelector('#gName').focus();
+}
+applyDefaultIfAny();
+initGate();
+
 (function loop(){
   requestAnimationFrame(loop);
   const t=performance.now()/1000;
@@ -1346,6 +1609,7 @@ renderPresets(); syncPins(); resize();
       for(const e of eyes)e.scale.y=(e.userData.baseSY||1.12)*bl;
     }
   }
+  if(PB.playing)stepPlayback(performance.now());
   updateCamera(); renderer.render(scene,camera);
 })();
 </script>
